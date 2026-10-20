@@ -1,6 +1,6 @@
 import math
 from flask import Flask, render_template, request, jsonify
-
+from scipy.special import jn_zeros, jnp_zeros
 app = Flask(__name__)
 
 
@@ -19,7 +19,7 @@ def calculate_coaxial():
         er = float(data.get('er', 0))
         d = float(data.get('d', 0))
         D = float(data.get('D', 0))
-
+        #Kiểm tra tham số
         if er <= 0 or d <= 0 or D <= 0:
             return jsonify({'error': 'Các tham số phải lớn hơn 0!'}), 400
         if D <= d:
@@ -28,7 +28,7 @@ def calculate_coaxial():
         log_ratio = math.log10(D / d)
         sqrt_er = math.sqrt(er)
 
-        # Công thức Slide trang 38
+        # Công thức tính các thông số
         z0 = (138.0 * log_ratio) / sqrt_er
         c_val = (24.13 * er) / log_ratio
         l_val = 460.6 * log_ratio
@@ -113,38 +113,51 @@ def calculate_rect_wg():
 
 
 # 3. ỐNG DẪN SÓNG HÌNH TRỤ TRÒN (Circular Waveguide)
-@app.route('/calculate_circ_wg', methods=['POST'])
+@app.route("/calculate_circ_wg", methods=["POST"])
 def calculate_circ_wg():
     try:
         data = request.get_json()
-        a_mm = float(data.get('a', 0))
-        er = float(data.get('er', 1.0))
-        ur = float(data.get('ur', 1.0))
-        mode_type = str(data.get('mode_type', 'TE')).upper().strip()
-        m = int(data.get('m', 1))
-        n = int(data.get('n', 1))
-        f_ghz = float(data.get('f', 0))
+        a_mm = float(data.get("a", 0))
+        er = float(data.get("er", 1.0))
+        ur = float(data.get("ur", 1.0))
+        mode_type = str(data.get("mode_type", "TE")).upper().strip()
+        m = int(data.get("m", 1))
+        n = int(data.get("n", 1))
+        f_ghz = float(data.get("f", 0))
 
         # 1. Kiểm tra đầu vào âm / bằng 0
         if a_mm <= 0 or er <= 0 or ur <= 0 or f_ghz <= 0:
-            return jsonify({'error': 'Kích thước, tần số, er và ur phải lớn hơn 0!'}), 400
+            return (
+                jsonify(
+                    {"error": "Kích thước, tần số, er và ur phải lớn hơn 0!"}
+                ),
+                400,
+            )
 
         if m < 0 or n < 0:
-            return jsonify({'error': 'Chỉ số m và n phải lớn hơn hoặc bằng 0!'}), 400
+            return (
+                jsonify(
+                    {"error": "Chỉ số m và n phải lớn hơn hoặc bằng 0!"}
+                ),
+                400,
+            )
 
         if m == 0 and n == 0:
-            return jsonify({'error': f'Mốt sóng {mode_type}00 không tồn tại!'}), 400
+            return (
+                jsonify({"error": f"Mốt sóng {mode_type}00 không tồn tại!"}),
+                400,
+            )
 
         if n == 0:
-            return jsonify({'error': 'Ống dẫn sóng tròn yêu cầu n >= 1!'}), 400
+            return jsonify({"error": "Ống dẫn sóng tròn yêu cầu n >= 1!"}), 400
 
-        # 2. Tính trực tiếp nghiệm p_mn bằng công thức xấp xỉ tổng quát (không cần bảng tra)
-        if mode_type == 'TM':
-            # Nghiệm chi_mn cho sóng TM (J_m(x) = 0)
-            p_mn = (n + m / 2.0 - 0.25) * math.pi
+        # 2. Tính chính xác nghiệm p_mn bằng thư viện scipy.special
+        if mode_type == "TM":
+            # Nghiệm chi_mn của J_m(x) = 0 cho sóng TM
+            p_mn = float(jn_zeros(m, n)[n - 1])
         else:
-            # Nghiệm nu_mn cho sóng TE (J'_m(x) = 0)
-            p_mn = (n + m / 2.0 + 0.25) * math.pi
+            # Nghiệm nu_mn của J'_m(x) = 0 cho sóng TE
+            p_mn = float(jnp_zeros(m, n)[n - 1])
 
         a = a_mm / 1000.0
         v = C_SPEED / math.sqrt(er * ur)
@@ -158,28 +171,28 @@ def calculate_circ_wg():
         z_wave = 0.0
 
         if f_hz > fc_hz:
-            factor = math.sqrt(1.0 - (fc_hz / f_hz)**2)
+            factor = math.sqrt(1.0 - (fc_hz / f_hz) ** 2)
             z0_dielectric = Z0_AIR * math.sqrt(ur / er)
-            
-            if mode_type == 'TE':
+
+            if mode_type == "TE":
                 z_wave = z0_dielectric / factor
-            elif mode_type == 'TM':
+            elif mode_type == "TM":
                 z_wave = z0_dielectric * factor
 
             return jsonify({
-                'fc': round(fc_ghz, 3),
-                'lc': round(lc_mm, 2),
-                'zwave': round(z_wave, 2)
+                "fc": round(fc_ghz, 3),
+                "lc": round(lc_mm, 2),
+                "zwave": round(z_wave, 2),
             })
         else:
             return jsonify({
-                'fc': round(fc_ghz, 3),
-                'lc': round(lc_mm, 2),
-                'zwave': "Cắt sóng (f < fc)"
+                "fc": round(fc_ghz, 3),
+                "lc": round(lc_mm, 2),
+                "zwave": "Cắt sóng (f < fc)",
             })
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # 4. ĐƯỜNG TRUYỀN MẠCH IN (Microstrip Line)

@@ -170,4 +170,3 @@ Vì app đang bật chế độ debug, khi bạn sửa `app.py` và lưu lại, 
 | `Address already in use` / port 5000 bị chiếm | Một chương trình khác đang dùng cổng 5000 (trên macOS thường là AirPlay Receiver) | Tắt chương trình đó, hoặc sửa dòng cuối `app.py` thành `port=5001` rồi vào http://127.0.0.1:5001 |
 | Bấm tính mà không ra kết quả | Server đã bị tắt | Kiểm tra cửa sổ dòng lệnh còn chạy `python app.py` không |
 
-Ghi chú: `index.html` đang nạp script từ `polyfill.io`; tên miền này đã ngừng hoạt động và từng bị dùng phát tán mã độc, nên nên xóa thẻ script đó khỏi file.

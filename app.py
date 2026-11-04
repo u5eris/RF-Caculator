@@ -1,272 +1,250 @@
 import math
 from flask import Flask, render_template, request, jsonify
 from scipy.special import jn_zeros, jnp_zeros
+
 app = Flask(__name__)
 
+# ===== HẰNG SỐ VẬT LÝ (giá trị chuẩn CODATA) =====
+C_SPEED = 299792458.0                 # Vận tốc ánh sáng (m/s)
+EPS0 = 8.8541878128e-12               # Hằng số điện môi chân không (F/m)
+MU0 = 4.0 * math.pi * 1e-7            # Độ từ thẩm chân không (H/m)
+ETA0 = MU0 * C_SPEED                  # Trở kháng sóng chân không ≈ 376.73 Ω
 
-C_SPEED = 299792458.0
-Z0_AIR = 120.0 * math.pi
+
+class InputError(Exception):
+    """Lỗi dữ liệu đầu vào -> trả về HTTP 400."""
+
+
+def _cap(text):
+    return text if text[:1] in "εμ" else text[:1].upper() + text[1:]
+
+
+def get_float(data, key, default=None, name=None):
+    """Đọc một số thực từ JSON, báo lỗi tiếng Việt nếu ô bị trống hoặc sai định dạng."""
+    raw = data.get(key, default)
+    if raw is None or str(raw).strip() == '':
+        raise InputError(f'Vui lòng nhập {name or key}!')
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        raise InputError(_cap(f'{name or key} phải là một số!'))
+    if not math.isfinite(val):
+        raise InputError(_cap(f'{name or key} không hợp lệ!'))
+    return val
+
+
+def get_int(data, key, default=None, name=None):
+    """Đọc chỉ số mode (số nguyên). Từ chối giá trị lẻ như 1.5."""
+    val = get_float(data, key, default, name)
+    if val != int(val):
+        raise InputError(_cap(f'{name or key} phải là số nguyên!'))
+    return int(val)
+
+
+def get_mode(data):
+    mode_type = str(data.get('mode_type', 'TE')).upper().strip()
+    if mode_type not in ('TE', 'TM'):
+        raise InputError('Loại sóng phải là TE hoặc TM!')
+    return mode_type
+
+
+def handle(func):
+    """Bọc mỗi route: lỗi nhập liệu -> 400, lỗi khác -> 500."""
+    def wrapper():
+        try:
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                raise InputError('Dữ liệu gửi lên không hợp lệ!')
+            return jsonify(func(data))
+        except InputError as e:
+            return jsonify({'error': str(e)}), 400
+        except Exception as e:
+            return jsonify({'error': f'Lỗi hệ thống: {e}'}), 500
+    wrapper.__name__ = func.__name__
+    return wrapper
+
+
+def wave_impedance(mode_type, eta, fc_hz, f_hz):
+    """Trở kháng sóng của ống dẫn sóng; trả về chuỗi thông báo nếu f <= fc."""
+    if f_hz <= fc_hz:
+        return 'Cắt sóng (f ≤ fc)'
+    factor = math.sqrt(1.0 - (fc_hz / f_hz) ** 2)
+    z = eta / factor if mode_type == 'TE' else eta * factor
+    return round(z, 2)
+
 
 @app.route('/')
 def home():
     return render_template('index.html')
 
+
 # 1. CÁP ĐỒNG TRỤC (Coaxial Cable)
 @app.route('/calculate_coaxial', methods=['POST'])
-def calculate_coaxial():
-    try:
-        data = request.get_json()
-        er = float(data.get('er', 0))
-        d = float(data.get('d', 0))
-        D = float(data.get('D', 0))
-        #Kiểm tra tham số
-        if er <= 0 or d <= 0 or D <= 0:
-            return jsonify({'error': 'Các tham số phải lớn hơn 0!'}), 400
-        if D <= d:
-            return jsonify({'error': 'Đường kính vỏ ngoài D phải lớn hơn đường kính lõi d!'}), 400
+@handle
+def calculate_coaxial(data):
+    er = get_float(data, 'er', name='εr')
+    d = get_float(data, 'd', name='đường kính lõi d')
+    D = get_float(data, 'D', name='đường kính vỏ D')
 
-        log_ratio = math.log10(D / d)
-        sqrt_er = math.sqrt(er)
+    if er <= 0 or d <= 0 or D <= 0:
+        raise InputError('Các tham số phải lớn hơn 0!')
+    if D <= d:
+        raise InputError('Đường kính vỏ ngoài D phải lớn hơn đường kính lõi d!')
 
-        # Công thức tính các thông số
-        z0 = (138.0 * log_ratio) / sqrt_er
-        c_val = (24.13 * er) / log_ratio
-        l_val = 460.6 * log_ratio
-        fc = 190.85 / ((D + d) * sqrt_er)
-        vp_m_s = C_SPEED / sqrt_er
-        vp_km_s = vp_m_s / 1000.0
-        td_ns_m = 1000.0 / (vp_m_s / 1e6)
+    ln_ratio = math.log(D / d)
+    sqrt_er = math.sqrt(er)
 
-        return jsonify({
-            'z0': round(z0, 2),
-            'C': round(c_val, 2),
-            'L': round(l_val, 2),
-            'fc': round(fc, 3),
-            'vp': round(vp_km_s, 2),
-            'td': round(td_ns_m, 2)
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    z0 = ETA0 / (2.0 * math.pi * sqrt_er) * ln_ratio          # ≈ 138.06·log10(D/d)/√εr (Ω)
+    c_val = 2.0 * math.pi * EPS0 * er / ln_ratio * 1e12        # ≈ 24.16·εr/log10(D/d) (pF/m)
+    l_val = MU0 / (2.0 * math.pi) * ln_ratio * 1e9             # ≈ 460.5·log10(D/d) (nH/m)
+    # TE11: fc ≈ c / (π·(a+b)·√εr), a = d/2, b = D/2 -> fc = 2c / (π·(D+d)·√εr)
+    fc_ghz = 2.0 * C_SPEED / (math.pi * (D + d) * 1e-3 * sqrt_er) / 1e9
+    vp_m_s = C_SPEED / sqrt_er
+    td_ns_m = 1e9 / vp_m_s
+
+    return {
+        'z0': round(z0, 2),
+        'C': round(c_val, 2),
+        'L': round(l_val, 2),
+        'fc': round(fc_ghz, 3),
+        'vp': round(vp_m_s / 1000.0, 2),
+        'td': round(td_ns_m, 2),
+    }
 
 
 # 2. ỐNG DẪN SÓNG HÌNH CHỮ NHẬT (Rectangular Waveguide)
 @app.route('/calculate_rect_wg', methods=['POST'])
-def calculate_rect_wg():
-    try:
-        data = request.get_json()
-        a_mm = float(data.get('a', 0))
-        b_mm = float(data.get('b', 0))
-        mode_type = str(data.get('mode_type', 'TE')).upper().strip()
-        m = int(data.get('m', 1))
-        n = int(data.get('n', 0))
-        f_ghz = float(data.get('f', 0))
-        er = float(data.get('er', 1.0))
+@handle
+def calculate_rect_wg(data):
+    a_mm = get_float(data, 'a', name='chiều rộng a')
+    b_mm = get_float(data, 'b', name='chiều cao b')
+    er = get_float(data, 'er', 1.0, name='εr')
+    mode_type = get_mode(data)
+    m = get_int(data, 'm', 1, name='chỉ số m')
+    n = get_int(data, 'n', 0, name='chỉ số n')
+    f_ghz = get_float(data, 'f', name='tần số f')
 
-        if a_mm <= 0 or b_mm <= 0 or f_ghz <= 0 or er <= 0:
-            return jsonify({'error': 'Kích thước, tần số và er phải lớn hơn 0!'}), 400
-        if mode_type == 'TM' and (m == 0 or n == 0):
-            return jsonify({'error': 'Mốt sóng TM yêu cầu m >= 1 và n >= 1!'}), 400
-        if mode_type == 'TE' and m == 0 and n == 0:
-            return jsonify({'error': 'Mốt sóng TE00 không tồn tại!'}), 400
-        if m < 0 or n < 0:
-            return jsonify({'error': 'Chỉ số m và n phải lớn hơn hoặc bằng 0!'}), 400
+    if a_mm <= 0 or b_mm <= 0 or f_ghz <= 0 or er <= 0:
+        raise InputError('Kích thước, tần số và εr phải lớn hơn 0!')
+    if m < 0 or n < 0:
+        raise InputError('Chỉ số m và n phải lớn hơn hoặc bằng 0!')
+    if m == 0 and n == 0:
+        raise InputError(f'Mode {mode_type}00 không tồn tại!')
+    if mode_type == 'TM' and (m == 0 or n == 0):
+        raise InputError('Mode TM yêu cầu m ≥ 1 và n ≥ 1!')
 
-        a = a_mm / 1000.0
-        b = b_mm / 1000.0
-        v = C_SPEED / math.sqrt(er)
+    a = a_mm / 1000.0
+    b = b_mm / 1000.0
+    v = C_SPEED / math.sqrt(er)
 
-        # 1. Hằng số phân ly / Tần số góc cắt kc (Chung cho TE/TM)
-        kc = math.sqrt((m * math.pi / a)**2 + (n * math.pi / b)**2)
-        
-        # 2. Tần số cắt fc (Hz và GHz) & Bước sóng cắt lc (mm) (Chung cho TE/TM)
-        fc_hz = (v * kc) / (2.0 * math.pi)
-        fc_ghz = fc_hz / 1e9
-        lc_mm = (v / fc_hz) * 1000.0
+    kc = math.sqrt((m * math.pi / a) ** 2 + (n * math.pi / b) ** 2)   # số sóng cắt (rad/m)
+    fc_hz = v * kc / (2.0 * math.pi)
+    lc_mm = 2.0 * math.pi / kc * 1000.0                                  # bước sóng cắt λc = 2π/kc
 
-        f_hz = f_ghz * 1e9
-        z_wave = 0.0
-
-        # 3. Trở kháng sóng Zc (Phân biệt TE và TM)
-        if f_hz > fc_hz:
-            factor = math.sqrt(1.0 - (fc_hz / f_hz)**2)
-            z0_dielectric = Z0_AIR / math.sqrt(er)  # Z0 của môi trường điện chất
-            
-            if mode_type == 'TE':
-                z_wave = z0_dielectric / factor   # Zc_TE = Z0 / sqrt(1 - (fc/f)^2)
-            elif mode_type == 'TM':
-                z_wave = z0_dielectric * factor   # Zc_TM = Z0 * sqrt(1 - (fc/f)^2)
-            
-            return jsonify({
-                'fc': round(fc_ghz, 3),
-                'lc': round(lc_mm, 2),
-                'zwave': round(z_wave, 2)
-            })
-        else:
-            return jsonify({
-                'fc': round(fc_ghz, 3),
-                'lc': round(lc_mm, 2),
-                'zwave': "Cắt sóng (f < fc)"
-            })
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    return {
+        'fc': round(fc_hz / 1e9, 3),
+        'lc': round(lc_mm, 2),
+        'zwave': wave_impedance(mode_type, ETA0 / math.sqrt(er), fc_hz, f_ghz * 1e9),
+    }
 
 
 # 3. ỐNG DẪN SÓNG HÌNH TRỤ TRÒN (Circular Waveguide)
-@app.route("/calculate_circ_wg", methods=["POST"])
-def calculate_circ_wg():
-    try:
-        data = request.get_json()
-        a_mm = float(data.get("a", 0))
-        er = float(data.get("er", 1.0))
-        ur = float(data.get("ur", 1.0))
-        mode_type = str(data.get("mode_type", "TE")).upper().strip()
-        m = int(data.get("m", 1))
-        n = int(data.get("n", 1))
-        f_ghz = float(data.get("f", 0))
+@app.route('/calculate_circ_wg', methods=['POST'])
+@handle
+def calculate_circ_wg(data):
+    a_mm = get_float(data, 'a', name='bán kính a')
+    er = get_float(data, 'er', 1.0, name='εr')
+    ur = get_float(data, 'ur', 1.0, name='μr')
+    mode_type = get_mode(data)
+    m = get_int(data, 'm', 1, name='chỉ số m')
+    n = get_int(data, 'n', 1, name='chỉ số n')
+    f_ghz = get_float(data, 'f', name='tần số f')
 
-        # 1. Kiểm tra đầu vào âm / bằng 0
-        if a_mm <= 0 or er <= 0 or ur <= 0 or f_ghz <= 0:
-            return (
-                jsonify(
-                    {"error": "Kích thước, tần số, er và ur phải lớn hơn 0!"}
-                ),
-                400,
-            )
+    if a_mm <= 0 or er <= 0 or ur <= 0 or f_ghz <= 0:
+        raise InputError('Kích thước, tần số, εr và μr phải lớn hơn 0!')
+    if m < 0 or n < 0:
+        raise InputError('Chỉ số m và n phải lớn hơn hoặc bằng 0!')
+    if n == 0:
+        raise InputError('Ống dẫn sóng tròn yêu cầu n ≥ 1!')
 
-        if m < 0 or n < 0:
-            return (
-                jsonify(
-                    {"error": "Chỉ số m và n phải lớn hơn hoặc bằng 0!"}
-                ),
-                400,
-            )
+    # p_mn: nghiệm thứ n của J_m(x) = 0 (TM) hoặc J'_m(x) = 0 (TE)
+    if mode_type == 'TM':
+        p_mn = float(jn_zeros(m, n)[n - 1])
+    else:
+        p_mn = float(jnp_zeros(m, n)[n - 1])
 
-        if m == 0 and n == 0:
-            return (
-                jsonify({"error": f"Mốt sóng {mode_type}00 không tồn tại!"}),
-                400,
-            )
+    a = a_mm / 1000.0
+    v = C_SPEED / math.sqrt(er * ur)
 
-        if n == 0:
-            return jsonify({"error": "Ống dẫn sóng tròn yêu cầu n >= 1!"}), 400
+    kc = p_mn / a
+    fc_hz = v * kc / (2.0 * math.pi)
+    lc_mm = 2.0 * math.pi / kc * 1000.0
 
-        # 2. Tính chính xác nghiệm p_mn bằng thư viện scipy.special
-        if mode_type == "TM":
-            # Nghiệm chi_mn của J_m(x) = 0 cho sóng TM
-            p_mn = float(jn_zeros(m, n)[n - 1])
-        else:
-            # Nghiệm nu_mn của J'_m(x) = 0 cho sóng TE
-            p_mn = float(jnp_zeros(m, n)[n - 1])
-
-        a = a_mm / 1000.0
-        v = C_SPEED / math.sqrt(er * ur)
-
-        # 3. Tính toán các đại lượng đầu ra theo công thức chuẩn
-        fc_hz = (p_mn * v) / (2.0 * math.pi * a)
-        fc_ghz = fc_hz / 1e9
-        lc_mm = (v / fc_hz) * 1000.0
-
-        f_hz = f_ghz * 1e9
-        z_wave = 0.0
-
-        if f_hz > fc_hz:
-            factor = math.sqrt(1.0 - (fc_hz / f_hz) ** 2)
-            z0_dielectric = Z0_AIR * math.sqrt(ur / er)
-
-            if mode_type == "TE":
-                z_wave = z0_dielectric / factor
-            elif mode_type == "TM":
-                z_wave = z0_dielectric * factor
-
-            return jsonify({
-                "fc": round(fc_ghz, 3),
-                "lc": round(lc_mm, 2),
-                "zwave": round(z_wave, 2),
-            })
-        else:
-            return jsonify({
-                "fc": round(fc_ghz, 3),
-                "lc": round(lc_mm, 2),
-                "zwave": "Cắt sóng (f < fc)",
-            })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return {
+        'fc': round(fc_hz / 1e9, 3),
+        'lc': round(lc_mm, 2),
+        'zwave': wave_impedance(mode_type, ETA0 * math.sqrt(ur / er), fc_hz, f_ghz * 1e9),
+    }
 
 
-# 4. ĐƯỜNG TRUYỀN MẠCH IN (Microstrip Line)
+# 4. ĐƯỜNG TRUYỀN MẠCH IN (Microstrip Line) — công thức gần đúng Hammerstad (Pozar)
 @app.route('/calculate_microstrip', methods=['POST'])
-def calculate_microstrip():
-    try:
-        data = request.get_json()
-        w = float(data.get('w', 0))
-        d = float(data.get('d', 0))
-        er = float(data.get('er', 0))
+@handle
+def calculate_microstrip(data):
+    w = get_float(data, 'w', name='chiều rộng W')
+    d = get_float(data, 'd', name='độ dày d')
+    er = get_float(data, 'er', name='εr')
 
-        if w <= 0 or d <= 0 or er <= 0:
-            return jsonify({'error': 'Các tham số phải lớn hơn 0!'}), 400
+    if w <= 0 or d <= 0 or er <= 0:
+        raise InputError('Các tham số phải lớn hơn 0!')
+    if er < 1:
+        raise InputError('Hằng số điện môi εr của đế phải ≥ 1!')
 
-        wd_ratio = w / d
+    wd = w / d
+    eeff = (er + 1.0) / 2.0 + (er - 1.0) / 2.0 / math.sqrt(1.0 + 12.0 / wd)
 
-        # Công thức Slide trang 44: Hằng số điện môi hiệu dụng eps_e
-        eeff = ((er + 1.0) / 2.0) + ((er - 1.0) / 2.0) * (1.0 / math.sqrt(1.0 + 12.0 * (d / w)))
+    if wd <= 1.0:
+        z0 = 60.0 / math.sqrt(eeff) * math.log(8.0 / wd + wd / 4.0)
+    else:
+        z0 = 120.0 * math.pi / (math.sqrt(eeff) * (wd + 1.393 + 0.667 * math.log(wd + 1.444)))
 
-        # Công thức Slide trang 45: Trở kháng đặc tính Z0
-        if wd_ratio <= 1.0:
-            z0 = (60.0 / math.sqrt(eeff)) * math.log((8.0 * d / w) + (w / (4.0 * d)))
-        else:
-            term = wd_ratio + 1.393 + 0.667 * math.log(wd_ratio + 1.444)
-            z0 = (120.0 * math.pi) / (math.sqrt(eeff) * term)
+    return {
+        'wd_ratio': round(wd, 3),
+        'eeff': round(eeff, 3),
+        'z0': round(z0, 2),
+    }
 
-        return jsonify({
-            'wd_ratio': round(wd_ratio, 3),
-            'eeff': round(eeff, 3),
-            'z0': round(z0, 2)
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-# 5. ĐƯỜNG TRUYỀN HAI DÂY (Two-Wire Line / Parallel-Wire Line)
+
+# 5. ĐƯỜNG TRUYỀN HAI DÂY (Two-Wire Line)
 @app.route('/calculate_twowire', methods=['POST'])
-def calculate_twowire():
-    try:
-        data = request.get_json()
-        er = float(data.get('er', 1.0))
-        d = float(data.get('d', 0))  # Đường kính mỗi dây (mm)
-        D = float(data.get('D', 0))  # Khoảng cách giữa tâm 2 dây (mm)
+@handle
+def calculate_twowire(data):
+    er = get_float(data, 'er', 1.0, name='εr')
+    d = get_float(data, 'd', name='đường kính dây d')      # đường kính mỗi dây (mm)
+    D = get_float(data, 'D', name='khoảng cách tâm D')     # khoảng cách giữa tâm 2 dây (mm)
 
-        if er <= 0 or d <= 0 or D <= 0:
-            return jsonify({'error': 'Các tham số phải lớn hơn 0!'}), 400
-        if D <= d:
-            return jsonify({'error': 'Khoảng cách D giữa hai tâm dây phải lớn hơn đường kính dây d!'}), 400
+    if er <= 0 or d <= 0 or D <= 0:
+        raise InputError('Các tham số phải lớn hơn 0!')
+    if D <= d:
+        raise InputError('Khoảng cách D giữa hai tâm dây phải lớn hơn đường kính dây d!')
 
-        sqrt_er = math.sqrt(er)
-        
-        # Trở kháng đặc tính Z0 (Ohm)
-        # Công thức gần đúng chuẩn cho D >> d: Z0 = (120 / sqrt(er)) * ln(2D / d)
-        # Hoặc dùng arcosh: Z0 = (120 / sqrt(er)) * acosh(D / d)
-        z0 = (120.0 / sqrt_er) * math.acosh(D / d)
+    sqrt_er = math.sqrt(er)
+    x = math.acosh(D / d)        # ≈ ln(2D/d) khi D >> d
 
-        # Điện dung trên một đơn vị chiều dài C' (pF/m)
-        c_val = (math.pi * 8.854e-12 * er / math.acosh(D / d)) * 1e12
+    z0 = ETA0 / (math.pi * sqrt_er) * x            # ≈ (119.9/√εr)·acosh(D/d) (Ω)
+    c_val = math.pi * EPS0 * er / x * 1e12         # pF/m
+    l_val = MU0 / math.pi * x * 1e9                # nH/m
+    vp_m_s = C_SPEED / sqrt_er
+    td_ns_m = 1e9 / vp_m_s
 
-        # Độ tự cảm trên một đơn vị chiều dài L' (nH/m)
-        l_val = (4e-7 * math.acosh(D / d)) * 1e9
+    return {
+        'z0': round(z0, 2),
+        'C': round(c_val, 2),
+        'L': round(l_val, 2),
+        'vp': round(vp_m_s / 1000.0, 2),
+        'td': round(td_ns_m, 2),
+    }
 
-        # Vận tốc lan truyền Vp (km/s) và Thời gian trễ td (ns/m)
-        vp_m_s = C_SPEED / sqrt_er
-        vp_km_s = vp_m_s / 1000.0
-        td_ns_m = 1000.0 / (vp_m_s / 1e6)
-
-        return jsonify({
-            'z0': round(z0, 2),
-            'C': round(c_val, 2),
-            'L': round(l_val, 2),
-            'vp': round(vp_km_s, 2),
-            'td': round(td_ns_m, 2)
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

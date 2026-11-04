@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<script id="MathJax-script" async src="https://jsdelivr.net"></script>
 <html lang="vi">
 <head>
   <meta charset="UTF-8">
@@ -193,10 +192,10 @@ input::-webkit-inner-spin-button {
     <div id="coaxial" class="calc-section active">
       <div class="diagram-layout">
         <div>
-          <img src="/static/images/model2.png" width="130">
+          <img src="/static/images/model.jpg" width="400">
         </div>
         <div>
-          <img src="/static/images/model.jpg" width="400">
+          <img src="/static/images/model14.png" width="130">
         </div>
         
         <div class="inputs-box">
@@ -233,6 +232,7 @@ input::-webkit-inner-spin-button {
         <div class="input-row"><label>Độ tự cảm L:</label><input type="text" id="coax_L" readonly><span class="unit">[nH/m]</span></div>
         <div class="input-row"><label>Tần số cắt f<sub>c</sub> :</label><input type="text" id="coax_fc" readonly><span class="unit">[GHz]</span></div>
         <div class="input-row"><label>Vận tốc pha v<sub>p</sub>:</label><input type="text" id="coax_vp" readonly><span class="unit">[km/s]</span></div>
+        <div class="input-row" style="grid-column: span 2; justify-content: center;"><label>Thời gian trễ t<sub>d</sub>:</label><input type="text" id="coax_td" readonly><span class="unit">[ns/m]</span></div>
         
       </div>
     </div>
@@ -255,6 +255,11 @@ input::-webkit-inner-spin-button {
           <div class="input-row">
             <label>Hằng số εr:</label>
             <input type="number" id="circ_er" step="any" placeholder="1.0" value="1.0">
+            <span class="unit"></span>
+          </div>
+          <div class="input-row">
+            <label>μ<sub>r</sub>:</label>
+            <input type="number" id="circ_ur" step="any" placeholder="1.0" value="1.0">
             <span class="unit"></span>
           </div>
           <div class="input-row">
@@ -522,6 +527,7 @@ async function calcCoaxial() {
     async function calcCircularWG() {
       const a = document.getElementById('circ_a').value;
       const er = document.getElementById('circ_er').value;
+      const ur = document.getElementById('circ_ur').value;
       const mode_type = document.getElementById('circ_mode_type').value;
       const m = document.getElementById('circ_m').value;
       const n = document.getElementById('circ_n').value;
@@ -534,7 +540,7 @@ async function calcCoaxial() {
         const response = await fetch('/calculate_circ_wg', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ a: a, er: er, mode_type: mode_type, m: m, n: n, f: f })
+          body: JSON.stringify({ a: a, er: er, ur: ur, mode_type: mode_type, m: m, n: n, f: f })
         });
 
         const data = await response.json();
@@ -547,7 +553,7 @@ async function calcCoaxial() {
 
         document.getElementById('circ_fc').value = data.fc;
         document.getElementById('circ_lc').value = data.lc;
-        document.getElementById('circ_zwave').value = data.zwave || '';
+        document.getElementById('circ_zwave').value = data.zwave;
 
       } catch (err) {
         errorDiv.innerText = 'Không thể kết nối tới Server Python!';

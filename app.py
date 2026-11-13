@@ -119,13 +119,14 @@ def calculate_rect_wg(data):
     a_mm = get_float(data, 'a', name='chiều rộng a')
     b_mm = get_float(data, 'b', name='chiều cao b')
     er = get_float(data, 'er', 1.0, name='εr')
+    ur = get_float(data, 'ur', 1.0, name='μr')
     mode_type = get_mode(data)
     m = get_int(data, 'm', 1, name='chỉ số m')
     n = get_int(data, 'n', 0, name='chỉ số n')
     f_ghz = get_float(data, 'f', name='tần số f')
 
-    if a_mm <= 0 or b_mm <= 0 or f_ghz <= 0 or er <= 0:
-        raise InputError('Kích thước, tần số và εr phải lớn hơn 0!')
+    if a_mm <= 0 or b_mm <= 0 or f_ghz <= 0 or er <= 0 or ur <= 0:
+        raise InputError('Kích thước, tần số, εr và μr phải lớn hơn 0!')
     if m < 0 or n < 0:
         raise InputError('Chỉ số m và n phải lớn hơn hoặc bằng 0!')
     if m == 0 and n == 0:
@@ -135,7 +136,7 @@ def calculate_rect_wg(data):
 
     a = a_mm / 1000.0
     b = b_mm / 1000.0
-    v = C_SPEED / math.sqrt(er)
+    v = C_SPEED / math.sqrt(er * ur)
 
     kc = math.sqrt((m * math.pi / a) ** 2 + (n * math.pi / b) ** 2)   # số sóng cắt (rad/m)
     fc_hz = v * kc / (2.0 * math.pi)
@@ -144,7 +145,7 @@ def calculate_rect_wg(data):
     return {
         'fc': round(fc_hz / 1e9, 3),
         'lc': round(lc_mm, 2),
-        'zwave': wave_impedance(mode_type, ETA0 / math.sqrt(er), fc_hz, f_ghz * 1e9),
+        'zwave': wave_impedance(mode_type, ETA0 * math.sqrt(ur / er), fc_hz, f_ghz * 1e9),
     }
 
 

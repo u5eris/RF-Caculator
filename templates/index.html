@@ -325,6 +325,11 @@ input::-webkit-inner-spin-button {
             <span class="unit"></span>
           </div>
           <div class="input-row">
+            <label>μ<sub>r</sub>:</label>
+            <input type="number" id="rect_ur" step="any" placeholder="1.0" value="1.0">
+            <span class="unit"></span>
+          </div>
+          <div class="input-row">
             <label>Loại sóng:</label>
             <select id="rect_mode_type">
               <option value="TE">TE</option>
@@ -566,6 +571,7 @@ async function calcCoaxial() {
       const a = document.getElementById('rect_a').value;
       const b = document.getElementById('rect_b').value;
       const er = document.getElementById('rect_er').value;
+      const ur = document.getElementById('rect_ur').value;
       const mode_type = document.getElementById('rect_mode_type').value;
       const m = document.getElementById('rect_m').value;
       const n = document.getElementById('rect_n').value;
@@ -578,7 +584,7 @@ async function calcCoaxial() {
         const response = await fetch('/calculate_rect_wg', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ a: a, b: b, er: er, mode_type: mode_type, m: m, n: n, f: f })
+          body: JSON.stringify({ a: a, b: b, er: er, ur: ur, mode_type: mode_type, m: m, n: n, f: f })
         });
 
         const data = await response.json();
